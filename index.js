@@ -2,6 +2,8 @@ require("dotenv").config();
 const express = require("express");
 const nodemailer = require("nodemailer");
 const { createClient } = require("@supabase/supabase-js");
+const axios = require("axios");
+const FormData = require("form-data");
 
 // Change import syntax to require
 const Razorpay = require("razorpay");
@@ -172,6 +174,7 @@ app.post("/save-report-url", async (req, res) => {
   try {
     const { user_id, filePath } = req.body;
 
+
     if (!user_id || !filePath) {
       return res.status(400).json({ error: "Missing user_id or filePath" });
     }
@@ -190,15 +193,90 @@ app.post("/save-report-url", async (req, res) => {
       return res.status(500).json({ error: "Failed to save report URL" });
     }
 
-    console.log("✅ PDF report URL saved:", publicURL);
 
-    res.json({
-      success: true,
-      reportURL: publicURL,
-    });
+ 
+    
+    try {
+      console.log("📄 Step 1: Downloading PDF from:", publicURL);
+      
+      // Download the PDF file
+      const pdfResponse = await axios.get(publicURL, {
+        responseType: 'arraybuffer',
+        timeout: 30000 // 30 second timeout
+      });
+
+
+      // Create form data for the parse-pdf-toon API
+      const formData = new FormData();
+      formData.append('user_id', user_id);
+      
+      const filename = filePath.split('/').pop();
+      console.log("🔵 Filename extracted:", filename);
+      
+      formData.append('file', Buffer.from(pdfResponse.data), {
+        filename: filename,
+        contentType: 'application/pdf'
+      });
+
+ 
+
+      // Call the parse-pdf-toon API
+      const parseResponse = await axios.post(
+        'https://atmann-pdf.vercel.app/parse-pdf-toon',
+        formData,
+        {
+          headers: {
+            ...formData.getHeaders(),
+            'accept': 'application/json'
+          },
+          timeout: 60000, // 60 second timeout for parsing
+          maxContentLength: Infinity,
+          maxBodyLength: Infinity
+        }
+      );
+
+
+     
+      res.json({
+        success: true,
+        reportURL: publicURL,
+        parseResult: parseResponse.data
+      });
+
+    } catch (parseError) {
+      console.error("❌ ERROR in PDF parsing process:");
+      console.error("❌ Error message:", parseError.message);
+      console.error("❌ Error code:", parseError.code);
+      
+      if (parseError.response) {
+        console.error("❌ Response status:", parseError.response.status);
+        console.error("❌ Response data:", parseError.response.data);
+        console.error("❌ Response headers:", parseError.response.headers);
+      } else if (parseError.request) {
+        console.error("❌ No response received from API");
+        console.error("❌ Request details:", parseError.request);
+      }
+      
+      console.error("❌ Full error stack:", parseError.stack);
+      
+      // Still return success for URL saving, but include parse error
+      res.json({
+        success: true,
+        reportURL: publicURL,
+        parseError: "Failed to parse PDF",
+        parseErrorDetails: {
+          message: parseError.message,
+          code: parseError.code,
+          response: parseError.response?.data || null,
+          status: parseError.response?.status || null
+        }
+      });
+    }
+
   } catch (err) {
     console.error("❌ Server Error in save-report-url:", err);
-    res.status(500).json({ error: "Internal server error" });
+    console.error("❌ Error stack:", err.stack);
+    res.status(500).json({ error: "Internal server error", details: err.message });
   }
 });
 
